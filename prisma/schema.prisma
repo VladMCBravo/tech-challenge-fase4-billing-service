@@ -1,0 +1,79 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "cjs"
+  generatedFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum BudgetStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  PIX
+  CHECKOUT_PRO
+  CREDIT_CARD
+}
+
+model Budget {
+  id            String       @id @default(cuid())
+  workOrderId   String       @unique
+  workOrderCode String?
+  customerId    String
+  customerName  String?
+  customerEmail String?
+  servicesTotal Decimal      @db.Decimal(10, 2)
+  partsTotal    Decimal      @db.Decimal(10, 2)
+  totalAmount   Decimal      @db.Decimal(10, 2)
+  status        BudgetStatus @default(PENDING)
+  generatedAt   DateTime     @default(now())
+  sentAt        DateTime?
+  approvedAt    DateTime?
+  rejectedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  payments      Payment[]
+
+  @@index([status])
+  @@index([customerId])
+  @@map("budgets")
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  budgetId      String
+  workOrderId   String
+  amount        Decimal       @db.Decimal(10, 2)
+  method        PaymentMethod @default(PIX)
+  status        PaymentStatus @default(PENDING)
+  mercadoPagoId String?       @unique
+  paymentUrl    String?
+  qrCode        String?
+  failureReason String?
+  paidAt        DateTime?
+  refundedAt    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  budget        Budget        @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([status])
+  @@map("payments")
+}
