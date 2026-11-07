@@ -9,13 +9,31 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BillingService } from './billing.service';
+import { MercadoPagoService } from '../mercadopago/mercadopago.service';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { MercadoPagoWebhookDto } from './dto/mercadopago-webhook.dto';
 
 @ApiTags('Billing & Mercado Pago')
 @Controller('budgets')
 export class BillingController {
-  constructor(private readonly billingService: BillingService) {}
+  constructor(
+    private readonly billingService: BillingService,
+    private readonly mercadoPagoService: MercadoPagoService,
+  ) {}
+
+  @Post('mercadopago/oauth/token')
+  @ApiOperation({
+    summary:
+      'Autentica no Mercado Pago via client_id e client_secret retornando o token OAuth2 para chamadas de pagamento',
+  })
+  getMercadoPagoToken(
+    @Body() body?: { clientId?: string; clientSecret?: string },
+  ) {
+    return this.mercadoPagoService.getAccessToken(
+      body?.clientId,
+      body?.clientSecret,
+    );
+  }
 
   @Post()
   @ApiBearerAuth()

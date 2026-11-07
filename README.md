@@ -1,25 +1,27 @@
 # Tech Challenge Fase 4 — Billing Service (`tech-challenge-fase4-billing-service`)
 
-Microsserviço responsável pela geração de **Orçamentos (`Budgets`)**, processamento de **Pagamentos (`Payments`)** integrado ao **Mercado Pago** (Checkout Pro / PIX / Webhook) e coordenação de eventos de aprovação, recusa e estorno na **Saga Coreografada**.
+Microsserviço responsável pela geração de **Orçamentos (`Budgets`)**, autenticação OAuth2 (`client_id` / `client_secret` → `access_token`) e processamento de **Pagamentos (`Payments`)** integrado ao **Mercado Pago** (Checkout Pro / PIX / Webhook), além da coordenação de eventos de aprovação, recusa e estorno na **Saga Coreografada**.
 
 - **Participante:** Vladmir Musa Costa Bravo (RM 374193)
 - **Curso:** Pós-graduação em Arquitetura de Software — FIAP (SOAT)
 
 ---
 
-## 1. Responsabilidades e Isolamento de Dados
+## 1. Responsabilidades, Isolamento de Dados e Fluxo Mercado Pago
 
 - **Banco de Dados Próprio (SQL — PostgreSQL `billing_db`):** Contém exclusivamente as tabelas `budgets` e `payments`. Não possui acesso direto ao banco do `os-service` nem ao MongoDB do `execution-service`.
+- **Infraestrutura Terraform Própria (`/infra`) e Manifestos K8s (`/k8s`):** Provisionamento isolado do repositório ECR e da instância RDS PostgreSQL (`billing_db`).
 - **Integração com Mercado Pago (`src/mercadopago/mercadopago.service.ts`):**
-  - Cria preferências de pagamento (`/checkout/preferences`) e QR Code PIX vinculados ao `workOrderId` (`external_reference`).
-  - Recebe notificações via Webhook (`POST /api/budgets/webhook/mercadopago`).
-  - Realiza estorno/reembolso (`/v1/payments/{id}/refunds`) em caso de falha na execução da OS.
+  1. **Fluxo OAuth2 (`client_id` + `client_secret` → `access_token`):** Antes de criar uma preferência de pagamento ou via endpoint dedicado (`POST /api/budgets/mercadopago/oauth/token`), o serviço autentica no endpoint `/oauth/token` do Mercado Pago usando `client_id` e `client_secret` (`grant_type: client_credentials`) para obter um `access_token` Bearer.
+  2. **Fallback Mock Resiliente:** Caso o painel de credenciais de teste do Mercado Pago esteja indisponível ou sem credenciais externas configuradas, o serviço opera automaticamente com um **Mock OAuth2 + Checkout/PIX realista**, garantindo 100% de testabilidade ponta a ponta conforme alinhado com a coordenação da FIAP.
+  3. **Checkout / PIX e Webhook (`POST /api/budgets/webhook/mercadopago`):** Cria preferências (`/checkout/preferences`) e QR Code PIX vinculados ao `workOrderId` (`external_reference`) e processa notificações de aprovação (`approved`) ou rejeição (`rejected`).
+  4. **Estorno/Reembolso (`/v1/payments/{id}/refunds`):** Executado automaticamente quando a Saga reporta falha na execução (`execution.failed`).
 
 ---
 
 ## 2. Participação no Saga Pattern (Coreografado via RabbitMQ)
 
-1. **Consumo de `os.budget.requested`:** Quando o `os-service` move a OS para `WAITING_APPROVAL`, o `billing-service` consome o evento, gera o orçamento (`PENDING`) e cria a cobrança no Mercado Pago.
+1. **Consumo de `os.budget.requested`:** Quando o `os-service` move a OS para `WAITING_APPROVAL`, o `billing-service` consome o evento, gera o orçamento (`PENDING`), obtém o token OAuth2 e cria a cobrança no Mercado Pago.
 2. **Publicação de `payment.approved`:** Quando o pagamento é confirmado (via Webhook do Mercado Pago ou endpoint de aprovação), atualiza o orçamento/pagamento para `APPROVED` e publica `payment.approved` no RabbitMQ, liberando o início da execução no `os-service` e no `execution-service`.
 3. **Publicação de `payment.failed` (Gatilho de Rollback):** Quando o pagamento é recusado ou o orçamento é rejeitado, publica `payment.failed`, fazendo com que o `os-service` estorne as peças reservadas ao estoque e cancele a OS.
 4. **Consumo de `execution.failed` (Compensação de Pagamento):** Se a execução falhar na oficina após o pagamento aprovado, o `billing-service` consome `execution.failed`, **executa o estorno no Mercado Pago (`REFUNDED`)** e marca o orçamento como `CANCELLED`.
@@ -45,9 +47,9 @@ PASS src/billing/billing.service.spec.ts
 -------------------|---------|----------|---------|---------|-------------------
 File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
 -------------------|---------|----------|---------|---------|-------------------
-All files          |   82.51 |     74.5 |   94.11 |   82.65 |                   
+All files          |    83.5 |     76.8 |   94.28 |   83.68 |                   
  billing           |   97.43 |    78.57 |     100 |   98.66 | 298               
- mercadopago       |   96.29 |    83.33 |     100 |      96 | 96                
+ mercadopago       |   95.45 |    85.36 |     100 |   95.23 | 82,195            
  observability     |   85.71 |       75 |     100 |   84.21 | 25,33,42          
 -------------------|---------|----------|---------|---------|-------------------
 Test Suites: 1 passed, 1 total
@@ -56,8 +58,16 @@ Tests:       10 passed, 10 total
 
 ---
 
-## 4. Principais Endpoints e Execução
+## 4. CI/CD, Deploy Automatizado em Kubernetes e Nota sobre AWS Academy
 
+- O pipeline `.github/workflows/deploy.yml` possui gatilhos automáticos (`push` e `pull_request` na `main`) e `workflow_dispatch`.
+- Para contornar a limitação de expiração de sessão do **AWS Academy**, o job `deploy-k8s` sobe automaticamente um cluster Kubernetes no pipeline via **Kind (`helm/kind-action`)**, aplica todos os manifestos de `/k8s` (`secret.yaml`, `deployment.yaml`, `service.yaml`, `hpa.yaml`) e valida o rollout e status dos Pods/Services. Quando as credenciais AWS Academy estão ativas, realiza também o deploy no **Amazon EKS**.
+
+---
+
+## 5. Principais Endpoints e Execução
+
+- `POST /api/budgets/mercadopago/oauth/token` — Obtém `access_token` OAuth2 no Mercado Pago a partir de `client_id` e `client_secret` (com fallback Mock)
 - `POST /api/budgets` — Gera orçamento e cobrança no Mercado Pago
 - `GET /api/budgets/work-order/:workOrderId` — Consulta orçamento e pagamentos da OS
 - `POST /api/budgets/webhook/mercadopago` — Webhook de confirmação/recusa do Mercado Pago

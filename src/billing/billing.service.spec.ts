@@ -370,9 +370,27 @@ describe('BillingService & MercadoPagoService', () => {
         totalAmount: 100,
       });
       expect(fallbackPref.mercadoPagoId).toContain('mp_wo-fallback_');
+
+      // Testa fluxo OAuth client_id + client_secret
+      delete process.env.MERCADOPAGO_ACCESS_TOKEN;
+      process.env.MERCADOPAGO_CLIENT_ID = 'client-123';
+      process.env.MERCADOPAGO_CLIENT_SECRET = 'secret-123';
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'APP_USR-LIVE-OAUTH',
+          expires_in: 21600,
+          scope: 'read write',
+        }),
+      } as any);
+      const oauthRes = await mercadoPago.getAccessToken('client-123', 'secret-123');
+      expect(oauthRes.access_token).toBe('APP_USR-LIVE-OAUTH');
+      expect(oauthRes.mode).toBe('live');
     } finally {
       process.env.NODE_ENV = originalEnv;
       process.env.MERCADOPAGO_ACCESS_TOKEN = originalToken;
+      delete process.env.MERCADOPAGO_CLIENT_ID;
+      delete process.env.MERCADOPAGO_CLIENT_SECRET;
       global.fetch = originalFetch;
     }
 
