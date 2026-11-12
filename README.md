@@ -32,7 +32,6 @@ Microsserviço responsável pela geração de **Orçamentos (`Budgets`)**, auten
 
 ```text
 PASS src/billing/billing.service.spec.ts
-  BillingService & MercadoPagoService
     ✓ deve gerar orçamento e preferência PIX/Checkout no Mercado Pago quando acionado diretamente ou via evento os.budget.requested
     ✓ deve atualizar orçamento existente se estiver PENDING ou REJECTED
     ✓ deve impedir regeração de orçamento já aprovado ou cancelado
@@ -43,25 +42,52 @@ PASS src/billing/billing.service.spec.ts
     ✓ deve listar e buscar orçamentos e lançar NotFoundException quando não existir
     ✓ deve impedir aprovação ou rejeição de orçamento fora de PENDING
     ✓ deve exercitar chamada HTTP real do MercadoPagoService com token e fallback em erro, além de MetricsService e RabbitMQService
+PASS src/messaging/rabbitmq.service.spec.ts
+    ✓ modo in-memory > não conecta ao broker sem RABBITMQ_URL e registra eventos publicados
+    ✓ modo in-memory > despacha eventos para todos os handlers registrados
+    ✓ com RabbitMQ real > cria exchange/fila, faz bind das routing keys e só consome após o bootstrap
+    ✓ com RabbitMQ real > processa a mensagem no handler e confirma (ack)
+    ✓ com RabbitMQ real > rejeita (nack) mensagens inválidas ou cujo handler falha
+    ✓ com RabbitMQ real > publica eventos persistentes na exchange da Saga
+    ✓ com RabbitMQ real > registra erro quando a publicação no canal falha
+    ✓ com RabbitMQ real > reconecta automaticamente quando o broker ainda não está disponível
+    ✓ com RabbitMQ real > reconecta quando a conexão é encerrada e para ao desligar
+    ✓ com RabbitMQ real > cancela a reconexão pendente ao desligar
 
--------------------|---------|----------|---------|---------|-------------------
-File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
--------------------|---------|----------|---------|---------|-------------------
-All files          |    83.5 |     76.8 |   94.28 |   83.68 |                   
- billing           |   97.43 |    78.57 |     100 |   98.66 | 298               
- mercadopago       |   95.45 |    85.36 |     100 |   95.23 | 82,195            
- observability     |   85.71 |       75 |     100 |   84.21 | 25,33,42          
--------------------|---------|----------|---------|---------|-------------------
-Test Suites: 1 passed, 1 total
-Tests:       10 passed, 10 total
+-------------------------|---------|----------|---------|---------|--------------------
+File                     | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s  
+-------------------------|---------|----------|---------|---------|--------------------
+All files                |   96.41 |    83.97 |     100 |   97.44 |                    
+ billing                 |   97.43 |    78.57 |     100 |   98.66 |                    
+ mercadopago             |   95.45 |    85.36 |     100 |   95.23 |                    
+ messaging               |   98.14 |    90.19 |     100 |     100 |                    
+ observability           |   85.71 |       75 |     100 |   84.21 |                    
+-------------------------|---------|----------|---------|---------|--------------------
+Test Suites: 2 passed, 2 total
+Tests:       20 passed, 20 total
 ```
 
 ---
 
 ## 4. CI/CD, Deploy Automatizado em Kubernetes e Nota sobre AWS Academy
 
-- O pipeline `.github/workflows/deploy.yml` possui gatilhos automáticos (`push` e `pull_request` na `main`) e `workflow_dispatch`.
-- Para contornar a limitação de expiração de sessão do **AWS Academy**, o job `deploy-k8s` sobe automaticamente um cluster Kubernetes no pipeline via **Kind (`helm/kind-action`)**, aplica todos os manifestos de `/k8s` (`secret.yaml`, `deployment.yaml`, `service.yaml`, `hpa.yaml`) e valida o rollout e status dos Pods/Services. Quando as credenciais AWS Academy estão ativas, realiza também o deploy no **Amazon EKS**.
+Pipeline: [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) — disparado automaticamente em `push` e `pull_request` na `main` (e `workflow_dispatch`). A `main` é protegida: o merge só acontece via Pull Request com os dois jobs abaixo aprovados.
+
+| Job | O que faz |
+|---|---|
+| `test-and-quality` | `npm ci` → testes unitários com cobertura (`npm run test:cov`) → build → análise SonarQube/SonarCloud |
+| `build-and-deploy` | build da imagem Docker → cria cluster Kubernetes **Kind** → instala o metrics-server (HPA) → executa [`scripts/deploy-k8s.sh`](./scripts/deploy-k8s.sh) |
+
+O script [`scripts/deploy-k8s.sh`](./scripts/deploy-k8s.sh) faz o deploy completo e **falha o pipeline** se algo não subir:
+1. Sobe as dependências próprias do serviço — `k8s/postgres.yaml` (PostgreSQL `billing_db`) e `k8s/rabbitmq.yaml` (broker da Saga) — e espera ficarem prontas;
+2. Aplica `secret.yaml`, `deployment.yaml`, `service.yaml` e `hpa.yaml`;
+3. Espera o `kubectl rollout status` do `billing-service` (2 réplicas Ready);
+4. Testa os health checks pelo Service: `GET /api/health` e `GET /api/health/ready` (banco **e** RabbitMQ conectados — `"messaging":"connected"`);
+5. Imprime as evidências: deployments, pods, services, HPA e logs de conexão com o RabbitMQ.
+
+Para rodar localmente contra qualquer cluster (ex.: Kind): `kind create cluster && docker build -t oficina-billing-service:latest . && kind load docker-image oficina-billing-service:latest && ./scripts/deploy-k8s.sh`.
+
+**Nota sobre o AWS Academy:** as sessões do laboratório expiram e os créditos são limitados, então — conforme orientação dos professores — o deploy automatizado do pipeline é feito em Kubernetes local (**Kind**) dentro do próprio GitHub Actions, com manifests, script de deploy e evidências de pods/services/health checks nos logs de cada execução. Os mesmos manifestos são aplicáveis no Amazon EKS provisionado pelo Terraform (`/infra` e repositório `tech-challenge-fase3-infra-k8s`); nesse caso o `DATABASE_URL`/`MONGODB_URI` do Secret aponta para o banco gerenciado.
 
 ---
 
