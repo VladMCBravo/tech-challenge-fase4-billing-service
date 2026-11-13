@@ -7,6 +7,65 @@ Microsserviço responsável pela geração de **Orçamentos (`Budgets`)**, auten
 
 ---
 
+## Arquitetura do serviço
+
+### Componentes
+```mermaid
+flowchart LR
+    client["Cliente / Atendente"] -->|HTTPS + JWT| gw["Amazon API Gateway"]
+    gw -->|REST /api/budgets| api
+
+    subgraph k8s["Kubernetes (EKS / Kind) — namespace da aplicação"]
+        api["billing-service<br/>NestJS :3001<br/>Deployment 2-5 réplicas + HPA"]
+        db[("PostgreSQL billing_db<br/>budgets · payments")]
+        mq{{"RabbitMQ<br/>exchange topic oficina.saga<br/>fila billing-service.saga.queue"}}
+    end
+
+    api -->|Prisma ORM| db
+    api <-->|"OAuth2 client_credentials · preferência/PIX · estorno<br/>⇠ webhook POST /api/budgets/webhook/mercadopago"| mp["Mercado Pago<br/>(externo)"]
+    mq -->|"consome: os.budget.requested<br/>execution.failed"| api
+    api -->|"publica: payment.approved<br/>payment.failed"| mq
+    api -.->|APM traces · logs JSON · métricas| dd["Datadog"]
+```
+
+### Participação na Saga coreografada
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OS as os-service
+    participant MQ as RabbitMQ (oficina.saga)
+    participant BI as billing-service
+    participant DB as billing_db (PostgreSQL)
+    participant MP as Mercado Pago
+    participant EX as execution-service
+
+    OS->>MQ: os.budget.requested (OS em WAITING_APPROVAL)
+    MQ->>BI: os.budget.requested
+    BI->>MP: POST /oauth/token (client_id + client_secret)
+    MP-->>BI: access_token
+    BI->>MP: cria preferência Checkout Pro / PIX
+    BI->>DB: budget PENDING + payment PENDING
+    MP->>BI: webhook de pagamento
+    alt pagamento aprovado
+        BI->>DB: budget/payment APPROVED
+        BI->>MQ: payment.approved
+        MQ->>OS: OS → IN_EXECUTION
+        MQ->>EX: entra na fila de execução
+    else pagamento recusado (compensação)
+        BI->>DB: payment REJECTED
+        BI->>MQ: payment.failed
+        MQ->>OS: devolve peças ao estoque (REVERSAL) e OS → CANCELLED
+    end
+    opt falha na execução depois do pagamento
+        EX->>MQ: execution.failed
+        MQ->>BI: execution.failed
+        BI->>MP: POST /v1/payments/{id}/refunds
+        BI->>DB: payment REFUNDED · budget CANCELLED
+    end
+```
+
+---
+
 ## 1. Responsabilidades, Isolamento de Dados e Fluxo Mercado Pago
 
 - **Banco de Dados Próprio (SQL — PostgreSQL `billing_db`):** Contém exclusivamente as tabelas `budgets` e `payments`. Não possui acesso direto ao banco do `os-service` nem ao MongoDB do `execution-service`.
