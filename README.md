@@ -127,3 +127,8 @@ Todas as alterações entram na `main` via Pull Request (branch protegida); o pi
 `test-and-quality`: testes com cobertura mínima de 80%, build e SonarCloud. `build-and-deploy`: imagem Docker, cluster Kubernetes (Kind), deploy via [`scripts/deploy-k8s.sh`](./scripts/deploy-k8s.sh) e health checks.
 
 ![Run da main com os dois jobs aprovados](docs/evidencias/03-pipeline-main.png)
+
+### Deploy automatizado em Kubernetes (Kind) com health checks
+Log da etapa `scripts/deploy-k8s.sh` no pipeline: dependências próprias (PostgreSQL `billing_db` + RabbitMQ) prontas, rollout das 2 réplicas do `billing-service`, health checks (`/api/health` e `/api/health/ready` com banco e mensageria conectados), deployments/pods/services/HPA e logs JSON de conexão ao RabbitMQ.
+
+![Deploy no Kubernetes com pods, services, HPA e health checks](docs/evidencias/05-deploy-k8s-health-checks.png)
