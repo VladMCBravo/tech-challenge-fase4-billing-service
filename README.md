@@ -132,3 +132,8 @@ Todas as alterações entram na `main` via Pull Request (branch protegida); o pi
 Log da etapa `scripts/deploy-k8s.sh` no pipeline: dependências próprias (PostgreSQL `billing_db` + RabbitMQ) prontas, rollout das 2 réplicas do `billing-service`, health checks (`/api/health` e `/api/health/ready` com banco e mensageria conectados), deployments/pods/services/HPA e logs JSON de conexão ao RabbitMQ.
 
 ![Deploy no Kubernetes com pods, services, HPA e health checks](docs/evidencias/05-deploy-k8s-health-checks.png)
+
+### Pull Request com checagens automáticas
+PR #4 do billing-service mergeado: a `main` é protegida e o merge só é liberado após os jobs `test-and-quality` e `build-and-deploy` e a análise do SonarCloud passarem — o bot do SonarQube Cloud comenta o resultado do Quality Gate no próprio PR.
+
+![PR com checagens aprovadas e Quality Gate do SonarCloud](docs/evidencias/06-pr-checks-quality-gate.png)
